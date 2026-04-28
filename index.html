@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ImpactX Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #0b1220; color: #e9eefc; }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+    .card { background: #151f36; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px #0004; }
+    h1 { margin-bottom: 8px; }
+    .status { font-size: 1.2rem; font-weight: 700; padding: 4px 10px; border-radius: 8px; display: inline-block; }
+    .SAFE { background: #1f8b4c; }
+    .ALERT { background: #d99a00; }
+    .EMERGENCY { background: #c63535; }
+    .PENDING_CONFIRMATION { background: #4d6adf; }
+    .CANCELLED { background: #666; }
+    pre { white-space: pre-wrap; background: #0f1830; padding: 10px; border-radius: 8px; }
+    button { background: #4d6adf; color: white; border: 0; padding: 8px 12px; border-radius: 8px; cursor: pointer; }
+    .button-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .btn-safe { background: #1f8b4c; }
+    .btn-alert { background: #d99a00; color: #111; }
+    .btn-emergency { background: #c63535; }
+    .btn-secondary { background: #33466f; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.92rem; }
+    th, td { border-bottom: 1px solid #243150; padding: 8px 6px; text-align: left; }
+    th { color: #9db1e5; }
+    .muted { color: #9db1e5; }
+    .hw { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+    .led { width: 16px; height: 16px; border-radius: 50%; background: #333; box-shadow: inset 0 0 4px #000; }
+    .led.green.on { background: #35d06f; box-shadow: 0 0 10px #35d06f; }
+    .led.red.on { background: #f33; box-shadow: 0 0 10px #f33; }
+  </style>
+</head>
+<body>
+  <h1>🚗 ImpactX Emergency Dashboard</h1>
+  <p>Hybrid Safety: Edge (20s physical cancel button) + Cloud Agents</p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Current Status</h2>
+      <p id="statusBadge" class="status">Loading...</p>
+      <p><strong>Score:</strong> <span id="score">-</span></p>
+      <p><strong>Location:</strong> <a id="location" href="#" target="_blank">-</a></p>
+      <p><strong>Your Browser Location:</strong> <span id="myLocation">Requesting permission...</span></p>
+      <p><strong>Hospital:</strong> <span id="hospital">-</span></p>
+      <p><strong>Distance:</strong> <span id="distance">-</span></p>
+      <p><strong>Event Time:</strong> <span id="eventTime">-</span></p>
+      <div class="button-row">
+        <button id="sendSafeBtn" class="btn-safe">Demo SAFE</button>
+        <button id="sendAlertBtn" class="btn-alert">Demo ALERT</button>
+        <button id="sendEmergencyBtn" class="btn-emergency">Demo EMERGENCY</button>
+      </div>
+      <div class="button-row">
+        <button id="sendMyLocationEventBtn" class="btn-secondary">Send Demo Event (My Location)</button>
+        <button id="refreshBtn" class="btn-secondary">Refresh</button>
+      </div>
+      <p><small>Tip: ALERT/EMERGENCY enter 20s pending-confirmation before final state.</small></p>
+      <div class="hw">
+        <span>Green LED</span><span id="greenLed" class="led green on"></span>
+        <span>Red LED</span><span id="redLed" class="led red"></span>
+        <span id="buzzerState" class="muted">Buzzer: OFF</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Crash Event History</h2>
+      <p class="muted">Recent ALERT/EMERGENCY events only.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>Status</th>
+            <th>Score</th>
+            <th>Hospital</th>
+            <th>Distance</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody"></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Recent Agent Activity</h2>
+      <pre id="activity"></pre>
+    </section>
+  </div>
+
+  <script>
+    // API_BASE: empty string = same origin (works both locally and on Netlify)
+    const API_BASE = window.IMPACTX_API_BASE || '';
+
+    let myCoords = null;
+    let lastHardwareStatus = null;
+    const fallbackCoords = { lat: 18.5204, lon: 73.8567 };
+
+    async function requestBrowserLocation() {
+      const myLocationEl = document.getElementById('myLocation');
+      if (!('geolocation' in navigator)) {
+        myLocationEl.textContent = 'Geolocation not supported in this browser.';
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          myCoords = {
+            lat: position.coords.latitude,
+            lon: position.coords.longitude
+          };
+          myLocationEl.textContent = `${myCoords.lat.toFixed(6)}, ${myCoords.lon.toFixed(6)}`;
+        },
+        (error) => {
+          myLocationEl.textContent = `Permission denied or unavailable (${error.message})`;
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 }
+      );
+    }
+
+    async function sendDemoEventFromMyLocation() {
+      const coords = myCoords || fallbackCoords;
+      const payload = {
+        impact: 8.5,
+        tilt: 60,
+        speed: 72,
+        lat: coords.lat,
+        lon: coords.lon,
+        timestamp: new Date().toISOString()
+      };
+
+      await fetch(`${API_BASE}/event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      refresh();
+    }
+
+    async function sendScenarioEvent(level) {
+      const coords = myCoords || fallbackCoords;
+      const scenarios = {
+        SAFE: { impact: 3, speed: 15, tilt: 8 },           // expected < 20
+        ALERT: { impact: 6, speed: 35, tilt: 25 },         // expected 20-50
+        EMERGENCY: { impact: 12, speed: 80, tilt: 60 }     // expected > 50
+      };
+
+      const chosen = scenarios[level];
+      const payload = {
+        impact: chosen.impact,
+        tilt: chosen.tilt,
+        speed: chosen.speed,
+        lat: coords.lat,
+        lon: coords.lon,
+        timestamp: new Date().toISOString()
+      };
+
+      await fetch(`${API_BASE}/event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      refresh();
+    }
+
+    async function refresh() {
+      const [statusRes, logsRes] = await Promise.all([
+        fetch(`${API_BASE}/status`),
+        fetch(`${API_BASE}/logs`)
+      ]);
+      const statusData = await statusRes.json();
+      const logsData = await logsRes.json();
+
+      const latest = statusData.latest || {};
+      applyHardwareSimulation(latest.status || 'NO_DATA');
+      const badge = document.getElementById('statusBadge');
+      badge.textContent = latest.status || 'NO_DATA';
+      badge.className = `status ${latest.status || ''}`;
+      document.getElementById('score').textContent = latest.score ?? '-';
+
+      const location = document.getElementById('location');
+      location.href = latest.location_link || '#';
+      location.textContent = latest.location_link || '-';
+
+      document.getElementById('hospital').textContent = latest.hospital?.hospital || '-';
+      document.getElementById('distance').textContent = latest.hospital?.distance || '-';
+      document.getElementById('eventTime').textContent = latest.created_at || '-';
+
+      const activityLines = (statusData.activity || []).map(
+        a => `[${a.agent}] ${a.message} @ ${a.ts}`
+      );
+      document.getElementById('activity').textContent = activityLines.join('\n') || 'No activity yet.';
+
+      const rows = (logsData.events || [])
+        .filter(event => event.status === 'ALERT' || event.status === 'EMERGENCY')
+        .slice().reverse().slice(0, 12).map((event) => `
+        <tr>
+          <td>${event.created_at || '-'}</td>
+          <td><span class="status ${event.status || ''}">${event.status || '-'}</span></td>
+          <td>${event.score ?? '-'}</td>
+          <td>${event.hospital?.hospital || '-'}</td>
+          <td>${event.hospital?.distance || '-'}</td>
+        </tr>
+      `).join('');
+      document.getElementById('historyBody').innerHTML = rows || '<tr><td colspan="5" class="muted">No events recorded yet.</td></tr>';
+    }
+
+    function beep() {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = 1700;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.gain.value = 0.04;
+      osc.start();
+      setTimeout(() => {
+        osc.stop();
+        ctx.close();
+      }, 400);
+    }
+
+    function applyHardwareSimulation(status) {
+      const red = document.getElementById('redLed');
+      const buzzer = document.getElementById('buzzerState');
+      if (status === 'ALERT' || status === 'EMERGENCY' || status === 'PENDING_CONFIRMATION') {
+        red.classList.add('on');
+        buzzer.textContent = 'Buzzer: ON';
+        if (status !== lastHardwareStatus) {
+          beep();
+        }
+      } else {
+        red.classList.remove('on');
+        buzzer.textContent = 'Buzzer: OFF';
+      }
+      lastHardwareStatus = status;
+    }
+
+    function beep() {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = 1700;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.gain.value = 0.04;
+      osc.start();
+      setTimeout(() => {
+        osc.stop();
+        ctx.close();
+      }, 400);
+    }
+
+    function applyHardwareSimulation(status) {
+      const red = document.getElementById('redLed');
+      const buzzer = document.getElementById('buzzerState');
+      if (status === 'ALERT' || status === 'EMERGENCY' || status === 'PENDING_CONFIRMATION') {
+        red.classList.add('on');
+        buzzer.textContent = 'Buzzer: ON';
+        if (status !== lastHardwareStatus) {
+          beep();
+        }
+      } else {
+        red.classList.remove('on');
+        buzzer.textContent = 'Buzzer: OFF';
+      }
+      lastHardwareStatus = status;
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', refresh);
+    document.getElementById('sendMyLocationEventBtn').addEventListener('click', sendDemoEventFromMyLocation);
+    document.getElementById('sendSafeBtn').addEventListener('click', () => sendScenarioEvent('SAFE'));
+    document.getElementById('sendAlertBtn').addEventListener('click', () => sendScenarioEvent('ALERT'));
+    document.getElementById('sendEmergencyBtn').addEventListener('click', () => sendScenarioEvent('EMERGENCY'));
+    requestBrowserLocation();
+    refresh();
+    setInterval(refresh, 3000);
+  </script>
+</body>
+</html>
